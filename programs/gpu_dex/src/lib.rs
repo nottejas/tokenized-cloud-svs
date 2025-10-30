@@ -3,7 +3,7 @@ use anchor_spl::token::{self, Token, TokenAccount, Mint, MintTo, Transfer};
 use mpl_token_metadata::instructions::{CreateMetadataAccountV3, CreateMetadataAccountV3InstructionArgs};
 use mpl_token_metadata::types::DataV2;
 
-declare_id!("BRpDctiHbH3jC19VpcSBbKgKUJEnAqiuGWNwQEYv8Nzf");
+declare_id!("6KoWc2Ld2aJEze3PbBidw7r81wAKPRVUykgvpVsw9a8H");
 
 #[program]
 pub mod gpu_dex {

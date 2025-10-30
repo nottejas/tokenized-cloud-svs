@@ -19,10 +19,17 @@ anchor-debug = []
 custom-heap = []
 custom-panic = []
 
-
 [dependencies]
 anchor-lang = "0.32.1"
-anchor-spl = "0.32.1"  # Add this line
+anchor-spl = { version = "0.32.1", features = ["token"] }
+
+# Pin Solana dependencies to match Anchor
+solana-program = "2.3.0"
+solana-instruction = "2.3.0"
+solana-zk-sdk = "2.3.0"
+spl-token-2022 = { version = "8.0.1", features = ["no-entrypoint"] }
+
+# Optional (if using metadata later)
 mpl-token-metadata = "4.1.2"
 
 
