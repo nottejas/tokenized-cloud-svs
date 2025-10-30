@@ -8,8 +8,7 @@ import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 
 export const WalletContextProvider: FC<{ children: ReactNode }> = ({ children }) => {
   const network = WalletAdapterNetwork.Devnet;
-  const endpoint = 'http://localhost:8899'; // Localnet
-
+  const endpoint = 'https://api.devnet.solana.com';
   const wallets = useMemo(() => [new PhantomWalletAdapter()], []);
 
   return (

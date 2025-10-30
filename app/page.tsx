@@ -144,62 +144,69 @@ export default function Home() {
   }
 
   async function mintGpuTokens() {
-    if (!publicKey || !program) return;
+  if (!publicKey || !program) return;
 
-    setLoading(true);
-    try {
-      const gpuMint = await marketplace.getGpuMintPDA(program);
-      const mintAuthority = await marketplace.getMintAuthorityPDA(program);
-      const userTokenAccount = await getAssociatedTokenAddress(gpuMint, publicKey);
+  setLoading(true);
+  try {
+    const gpuMint = await marketplace.getGpuMintPDA(program);
+    const mintAuthority = await marketplace.getMintAuthorityPDA(program);
+    const userTokenAccount = await getAssociatedTokenAddress(gpuMint, publicKey);
 
-      // Check if token account exists, if not create it
-      const accountInfo = await connection.getAccountInfo(userTokenAccount);
-      
-      if (!accountInfo) {
-        // Create associated token account
-        const transaction = await program.methods
-          .mintGpuTokens(new BN(Number(mintAmount) * 1e9))
-          .accounts({
-            gpuMint,
+    // Check if token account exists, if not create it
+    const accountInfo = await connection.getAccountInfo(userTokenAccount);
+    
+    const amount = new BN(Number(mintAmount) * 1e9);
+    
+    if (!accountInfo) {
+      // Create associated token account AND mint in same transaction
+      const tx = await program.methods
+        .mintGpuTokens(amount)
+        .accounts({
+          gpuMint,
+          userTokenAccount,
+          mintAuthority,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .preInstructions([
+          createAssociatedTokenAccountInstruction(
+            publicKey,
             userTokenAccount,
-            mintAuthority,
-            tokenProgram: TOKEN_PROGRAM_ID,
-          })
-          .preInstructions([
-            createAssociatedTokenAccountInstruction(
-              publicKey,
-              userTokenAccount,
-              publicKey,
-              gpuMint
-            )
-          ])
-          .rpc();
+            publicKey,
+            gpuMint
+          )
+        ])
+        .rpc();
 
-        console.log('Created token account and minted:', transaction);
-      } else {
-        // Just mint
-        const tx = await program.methods
-          .mintGpuTokens(new BN(Number(mintAmount) * 1e9))
-          .accounts({
-            gpuMint,
-            userTokenAccount,
-            mintAuthority,
-            tokenProgram: TOKEN_PROGRAM_ID,
-          })
-          .rpc();
+      console.log('Created token account and minted:', tx);
+    } else {
+      // Just mint
+      const tx = await program.methods
+        .mintGpuTokens(amount)
+        .accounts({
+          gpuMint,
+          userTokenAccount,
+          mintAuthority,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .rpc();
 
-        console.log('Minted tokens:', tx);
-      }
+      console.log('Minted tokens:', tx);
+    }
 
-      alert(`✅ Minted ${mintAmount} gGPU tokens!`);
-      await fetchGpuBalance();
-    } catch (error: any) {
-      console.error('Error:', error);
+    alert(`✅ Minted ${mintAmount} gGPU tokens!`);
+    await fetchGpuBalance();
+  } catch (error: any) {
+    console.error('Error:', error);
+    
+    // Check for specific errors
+    if (error.message && error.message.includes('unauthorized')) {
+      alert('❌ Error: Mint authority issue. The program may need redeployment.');
+    } else {
       alert('❌ Error: ' + error.message);
     }
-    setLoading(false);
   }
-
+  setLoading(false);
+}
   async function createListing() {
     if (!publicKey || !program || !listAmount || !listPrice) {
       alert('Please fill in all fields');

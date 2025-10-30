@@ -7,7 +7,6 @@ declare_id!("BRpDctiHbH3jC19VpcSBbKgKUJEnAqiuGWNwQEYv8Nzf");
 pub mod gpu_dex {
     use super::*;
 
-    // Initialize the marketplace
     pub fn initialize_marketplace(ctx: Context<InitializeMarketplace>) -> Result<()> {
         let marketplace = &mut ctx.accounts.marketplace;
         marketplace.authority = ctx.accounts.authority.key();
@@ -15,29 +14,32 @@ pub mod gpu_dex {
         Ok(())
     }
 
-    // Initialize GPU token mint
     pub fn initialize_gpu_mint(_ctx: Context<InitializeGpuMint>) -> Result<()> {
         Ok(())
     }
 
-    // Mint GPU tokens to user
     pub fn mint_gpu_tokens(
         ctx: Context<MintGpuTokens>,
         amount: u64,
     ) -> Result<()> {
+        let seeds = &[
+            b"mint-authority".as_ref(),
+            &[ctx.bumps.mint_authority],
+        ];
+        let signer = &[&seeds[..]];
+
         let cpi_accounts = MintTo {
             mint: ctx.accounts.gpu_mint.to_account_info(),
             to: ctx.accounts.user_token_account.to_account_info(),
             authority: ctx.accounts.mint_authority.to_account_info(),
         };
         let cpi_program = ctx.accounts.token_program.to_account_info();
-        let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
-        
+        let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+
         token::mint_to(cpi_ctx, amount)?;
         Ok(())
     }
 
-    // Create a listing (sell order)
     pub fn create_listing(
         ctx: Context<CreateListing>,
         price: u64,
@@ -62,45 +64,52 @@ pub mod gpu_dex {
         };
         let cpi_program = ctx.accounts.token_program.to_account_info();
         let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
-        
+
         token::transfer(cpi_ctx, amount)?;
 
         Ok(())
     }
 
-    // Buy from listing
     pub fn buy_listing(
         ctx: Context<BuyListing>,
         amount: u64,
     ) -> Result<()> {
         let listing = &mut ctx.accounts.listing;
-        
+
         require!(listing.is_active, ErrorCode::ListingNotActive);
         require!(amount <= listing.amount, ErrorCode::InsufficientAmount);
 
-        let total_price = listing.price
-            .checked_mul(amount)
-            .ok_or(ErrorCode::Overflow)?;
+        let total_price = (listing.price as u128)
+            .checked_mul(amount as u128)
+            .ok_or(ErrorCode::Overflow)?
+            .checked_div(1_000_000_000)
+            .ok_or(ErrorCode::Overflow)? as u64;
 
         // Transfer SOL from buyer to seller
-        let ix = anchor_lang::solana_program::system_instruction::transfer(
-            &ctx.accounts.buyer.key(),
-            &listing.seller,
-            total_price,
-        );
-        anchor_lang::solana_program::program::invoke(
-            &ix,
-            &[
-                ctx.accounts.buyer.to_account_info(),
-                ctx.accounts.seller_sol_account.to_account_info(),
-            ],
-        )?;
+        {
+            let ix = anchor_lang::solana_program::system_instruction::transfer(
+                &ctx.accounts.buyer.key(),
+                &listing.seller,
+                total_price,
+            );
+            anchor_lang::solana_program::program::invoke(
+                &ix,
+                &[
+                    ctx.accounts.buyer.to_account_info(),
+                    ctx.accounts.seller_sol_account.to_account_info(),
+                ],
+            )?;
+        }
+
+        // Prepare signer seeds before using listing again
+        let listing_seller = listing.seller;
+        let listing_id_le = listing.listing_id.to_le_bytes();
 
         // Transfer GPU tokens from escrow to buyer
         let seeds = &[
             b"listing",
-            listing.seller.as_ref(),
-            &listing.listing_id.to_le_bytes(),
+            listing_seller.as_ref(),
+            &listing_id_le,
             &[ctx.bumps.listing],
         ];
         let signer = &[&seeds[..]];
@@ -108,15 +117,17 @@ pub mod gpu_dex {
         let cpi_accounts = Transfer {
             from: ctx.accounts.escrow_token_account.to_account_info(),
             to: ctx.accounts.buyer_token_account.to_account_info(),
-            authority: listing.to_account_info(),
+            authority: listing.to_account_info(), // always use the local var
         };
         let cpi_program = ctx.accounts.token_program.to_account_info();
         let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
-        
+
         token::transfer(cpi_ctx, amount)?;
 
-        // Update listing
-        listing.amount -= amount;
+        listing.amount = listing
+            .amount
+            .checked_sub(amount)
+            .ok_or(ErrorCode::Overflow)?;
         if listing.amount == 0 {
             listing.is_active = false;
         }
@@ -124,17 +135,17 @@ pub mod gpu_dex {
         Ok(())
     }
 
-    // Cancel listing
     pub fn cancel_listing(ctx: Context<CancelListing>) -> Result<()> {
         let listing = &mut ctx.accounts.listing;
-        
         require!(listing.is_active, ErrorCode::ListingNotActive);
 
-        // Transfer tokens back to seller
+        let listing_seller = listing.seller;
+        let listing_id_le = listing.listing_id.to_le_bytes();
+
         let seeds = &[
             b"listing",
-            listing.seller.as_ref(),
-            &listing.listing_id.to_le_bytes(),
+            listing_seller.as_ref(),
+            &listing_id_le,
             &[ctx.bumps.listing],
         ];
         let signer = &[&seeds[..]];
@@ -146,7 +157,7 @@ pub mod gpu_dex {
         };
         let cpi_program = ctx.accounts.token_program.to_account_info();
         let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
-        
+
         token::transfer(cpi_ctx, listing.amount)?;
 
         listing.is_active = false;
@@ -280,8 +291,8 @@ pub struct Marketplace {
 #[derive(InitSpace)]
 pub struct Listing {
     pub seller: Pubkey,
-    pub price: u64,      // Price in lamports per token
-    pub amount: u64,     // Number of tokens
+    pub price: u64,
+    pub amount: u64,
     pub is_active: bool,
     pub listing_id: u64,
 }
