@@ -13,4 +13,5 @@ cluster = "Devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
+initialize_gpu_mint = "anchor run -- provider.cluster devnet"
 test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
