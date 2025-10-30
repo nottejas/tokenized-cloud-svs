@@ -1,6 +1,10 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Mint, MintTo, Transfer};
 
+// Uncomment below if adding metadata functionality later
+// use mpl_token_metadata::instruction::{create_metadata_accounts_v3};
+// use mpl_token_metadata::state::DataV2;
+
 declare_id!("BRpDctiHbH3jC19VpcSBbKgKUJEnAqiuGWNwQEYv8Nzf");
 
 #[program]
@@ -14,7 +18,9 @@ pub mod gpu_dex {
         Ok(())
     }
 
-    pub fn initialize_gpu_mint(_ctx: Context<InitializeGpuMint>) -> Result<()> {
+    pub fn initialize_gpu_mint(ctx: Context<InitializeGpuMint>) -> Result<()> {
+        // Optional: Add token metadata creation here
+        // See notes below for adding metadata
         Ok(())
     }
 
@@ -35,7 +41,6 @@ pub mod gpu_dex {
         };
         let cpi_program = ctx.accounts.token_program.to_account_info();
         let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
-
         token::mint_to(cpi_ctx, amount)?;
         Ok(())
     }
@@ -56,7 +61,7 @@ pub mod gpu_dex {
 
         marketplace.listing_count += 1;
 
-        // Transfer tokens to escrow
+        // Transfer tokens to escrow account
         let cpi_accounts = Transfer {
             from: ctx.accounts.seller_token_account.to_account_info(),
             to: ctx.accounts.escrow_token_account.to_account_info(),
@@ -64,9 +69,7 @@ pub mod gpu_dex {
         };
         let cpi_program = ctx.accounts.token_program.to_account_info();
         let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
-
         token::transfer(cpi_ctx, amount)?;
-
         Ok(())
     }
 
@@ -101,29 +104,26 @@ pub mod gpu_dex {
             )?;
         }
 
-        // Prepare signer seeds before using listing again
-        let listing_seller = listing.seller;
-        let listing_id_le = listing.listing_id.to_le_bytes();
-
-        // Transfer GPU tokens from escrow to buyer
+        // Prepare signer seeds for PDA authority
         let seeds = &[
             b"listing",
-            listing_seller.as_ref(),
-            &listing_id_le,
+            listing.seller.as_ref(),
+            &listing.listing_id.to_le_bytes(),
             &[ctx.bumps.listing],
         ];
         let signer = &[&seeds[..]];
 
+        // Transfer GPU tokens from escrow to buyer
         let cpi_accounts = Transfer {
             from: ctx.accounts.escrow_token_account.to_account_info(),
             to: ctx.accounts.buyer_token_account.to_account_info(),
-            authority: listing.to_account_info(), // always use the local var
+            authority: listing.to_account_info(),
         };
         let cpi_program = ctx.accounts.token_program.to_account_info();
         let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
-
         token::transfer(cpi_ctx, amount)?;
 
+        // Decrease listing amount
         listing.amount = listing
             .amount
             .checked_sub(amount)
@@ -139,17 +139,16 @@ pub mod gpu_dex {
         let listing = &mut ctx.accounts.listing;
         require!(listing.is_active, ErrorCode::ListingNotActive);
 
-        let listing_seller = listing.seller;
-        let listing_id_le = listing.listing_id.to_le_bytes();
-
+        // Prepare signer seeds for PDA authority
         let seeds = &[
             b"listing",
-            listing_seller.as_ref(),
-            &listing_id_le,
+            listing.seller.as_ref(),
+            &listing.listing_id.to_le_bytes(),
             &[ctx.bumps.listing],
         ];
         let signer = &[&seeds[..]];
 
+        // Transfer tokens back to seller
         let cpi_accounts = Transfer {
             from: ctx.accounts.escrow_token_account.to_account_info(),
             to: ctx.accounts.seller_token_account.to_account_info(),
@@ -157,18 +156,15 @@ pub mod gpu_dex {
         };
         let cpi_program = ctx.accounts.token_program.to_account_info();
         let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
-
         token::transfer(cpi_ctx, listing.amount)?;
 
         listing.is_active = false;
         listing.amount = 0;
-
         Ok(())
     }
 }
 
-// Account Contexts
-
+// Account structures
 #[derive(Accounts)]
 pub struct InitializeMarketplace<'info> {
     #[account(
@@ -195,7 +191,10 @@ pub struct InitializeGpuMint<'info> {
         bump
     )]
     pub gpu_mint: Account<'info, Mint>,
-    /// CHECK: This is the mint authority PDA
+    /// CHECK: Metadata account for the mint
+    #[account(mut)]
+    pub metadata: UncheckedAccount<'info>,
+    /// CHECK: This is the PDA mint authority
     #[account(seeds = [b"mint-authority"], bump)]
     pub mint_authority: AccountInfo<'info>,
     #[account(mut)]
@@ -211,7 +210,7 @@ pub struct MintGpuTokens<'info> {
     pub gpu_mint: Account<'info, Mint>,
     #[account(mut)]
     pub user_token_account: Account<'info, TokenAccount>,
-    /// CHECK: This is the mint authority PDA
+    /// CHECK: PDA mint authority
     #[account(seeds = [b"mint-authority"], bump)]
     pub mint_authority: AccountInfo<'info>,
     pub token_program: Program<'info, Token>,
@@ -250,15 +249,23 @@ pub struct CreateListing<'info> {
 
 #[derive(Accounts)]
 pub struct BuyListing<'info> {
-    #[account(mut, seeds = [b"listing", listing.seller.as_ref(), &listing.listing_id.to_le_bytes()], bump)]
+    #[account(
+        mut,
+        seeds = [b"listing", listing.seller.as_ref(), &listing.listing_id.to_le_bytes()],
+        bump
+    )]
     pub listing: Account<'info, Listing>,
-    #[account(mut, seeds = [b"escrow", listing.key().as_ref()], bump)]
+    #[account(
+        mut,
+        seeds = [b"escrow", listing.key().as_ref()],
+        bump
+    )]
     pub escrow_token_account: Account<'info, TokenAccount>,
     #[account(mut)]
     pub buyer_token_account: Account<'info, TokenAccount>,
     #[account(mut)]
     pub buyer: Signer<'info>,
-    /// CHECK: This is the seller's SOL account
+    /// Seller's SOL account
     #[account(mut)]
     pub seller_sol_account: AccountInfo<'info>,
     pub token_program: Program<'info, Token>,
@@ -269,7 +276,11 @@ pub struct BuyListing<'info> {
 pub struct CancelListing<'info> {
     #[account(mut, seeds = [b"listing", seller.key().as_ref(), &listing.listing_id.to_le_bytes()], bump, has_one = seller)]
     pub listing: Account<'info, Listing>,
-    #[account(mut, seeds = [b"escrow", listing.key().as_ref()], bump)]
+    #[account(
+        mut,
+        seeds = [b"escrow", listing.key().as_ref()],
+        bump
+    )]
     pub escrow_token_account: Account<'info, TokenAccount>,
     #[account(mut)]
     pub seller_token_account: Account<'info, TokenAccount>,
@@ -278,17 +289,17 @@ pub struct CancelListing<'info> {
     pub token_program: Program<'info, Token>,
 }
 
-// Account Structures
-
+// Data Structures
 #[account]
-#[derive(InitSpace)]
 pub struct Marketplace {
     pub authority: Pubkey,
     pub listing_count: u64,
 }
+impl Marketplace {
+    pub const INIT_SPACE: usize = 32 + 8;
+}
 
 #[account]
-#[derive(InitSpace)]
 pub struct Listing {
     pub seller: Pubkey,
     pub price: u64,
@@ -296,9 +307,11 @@ pub struct Listing {
     pub is_active: bool,
     pub listing_id: u64,
 }
+impl Listing {
+    pub const INIT_SPACE: usize = 32 + 8 + 8 + 1 + 8;
+}
 
-// Errors
-
+// Error codes
 #[error_code]
 pub enum ErrorCode {
     #[msg("Listing is not active")]
