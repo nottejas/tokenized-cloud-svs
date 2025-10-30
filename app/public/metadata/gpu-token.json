@@ -1,0 +1,17 @@
+{
+  "name": "GPU Token",
+  "symbol": "gGPU",
+  "description": "Tokenized GPU compute power for decentralized cloud computing",
+  "image": "https://raw.githubusercontent.com/nottejas/gpu-token-metadata/refs/heads/main/gpu-token.png",
+  "external_url": "https://your-dex-website.com",
+  "attributes": [
+    {
+      "trait_type": "Type",
+      "value": "Utility Token"
+    },
+    {
+      "trait_type": "Decimals",
+      "value": "9"
+    }
+  ]
+}
