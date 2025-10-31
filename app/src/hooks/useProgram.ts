@@ -4,8 +4,7 @@ import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
 import rawIdl from "../idl/gpu_dex.json";
 
-// REPLACE THIS WITH YOUR NEW PROGRAM ID FROM STEP 1
-const PROGRAM_ID = new PublicKey('BRpDctiHbH3jC19VpcSBbKgKUJEnAqiuGWNwQEYv8Nzf');
+const PROGRAM_ID = new PublicKey('7BXzUwxv9aKULu8Jw4sYM9Web2Mg1PNHTrVWwJbiAsxw');
 
 export function useProgram() {
   const { connection } = useConnection();

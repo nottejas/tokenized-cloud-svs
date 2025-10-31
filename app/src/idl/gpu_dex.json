@@ -1,10 +1,9 @@
 {
-  "address": "BRpDctiHbH3jC19VpcSBbKgKUJEnAqiuGWNwQEYv8Nzf",
+  "address": "7BXzUwxv9aKULu8Jw4sYM9Web2Mg1PNHTrVWwJbiAsxw",
   "metadata": {
     "name": "gpu_dex",
     "version": "0.1.0",
-    "spec": "0.1.0",
-    "description": "Created with Anchor"
+    "spec": "0.1.0"
   },
   "instructions": [
     {

@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Mint, MintTo, Transfer};
 
-declare_id!("EZGC8PbLQffAEDs64wpetMiMy2xbZ99D7AgeRQV368eZ");
+declare_id!("7BXzUwxv9aKULu8Jw4sYM9Web2Mg1PNHTrVWwJbiAsxw");
 
 #[program]
 pub mod gpu_dex {

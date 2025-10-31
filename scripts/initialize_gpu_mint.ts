@@ -1,11 +1,13 @@
 import * as anchor from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
+import BN from "bn.js";
 
 (async () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
   const program = anchor.workspace.GpuDex;
+
   const [gpuMintPda] = PublicKey.findProgramAddressSync(
     [Buffer.from("gpu-mint")],
     program.programId
@@ -16,16 +18,14 @@ import { PublicKey } from "@solana/web3.js";
     program.programId
   );
 
-  const metadata = anchor.web3.Keypair.generate();
-
   console.log("GPU Mint PDA:", gpuMintPda.toBase58());
   console.log("Mint Authority PDA:", mintAuthorityPda.toBase58());
 
+  // Initialize the GPU mint
   await program.methods
     .initializeGpuMint()
     .accounts({
       gpuMint: gpuMintPda,
-      metadata: metadata.publicKey,
       mintAuthority: mintAuthorityPda,
       authority: provider.wallet.publicKey,
       tokenProgram: anchor.utils.token.TOKEN_PROGRAM_ID,

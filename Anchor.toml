@@ -5,7 +5,7 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-gpu_dex = "EZGC8PbLQffAEDs64wpetMiMy2xbZ99D7AgeRQV368eZ"
+gpu_dex = "7BXzUwxv9aKULu8Jw4sYM9Web2Mg1PNHTrVWwJbiAsxw"
 
 [registry]
 url = "https://api.apr.dev"
@@ -14,6 +14,10 @@ url = "https://api.apr.dev"
 cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
+[build]
+program-keypair = "target/deploy/gpu_dex-keypair.json"
+
 [scripts]
 initialize_gpu_mint = "npx ts-node scripts/initialize_gpu_mint.ts"
+mint_gpu_tokens = "npx ts-node scripts/mint_gpu_tokens.ts"
 test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
