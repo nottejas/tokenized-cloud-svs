@@ -7,6 +7,89 @@
   },
   "instructions": [
     {
+      "name": "add_gpu_metadata",
+      "discriminator": [
+        72,
+        244,
+        28,
+        9,
+        60,
+        241,
+        253,
+        43
+      ],
+      "accounts": [
+        {
+          "name": "gpu_mint",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  112,
+                  117,
+                  45,
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "metadata",
+          "writable": true
+        },
+        {
+          "name": "mint_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116,
+                  45,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        },
+        {
+          "name": "token_metadata_program"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "buy_listing",
       "discriminator": [
         115,

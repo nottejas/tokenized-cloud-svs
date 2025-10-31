@@ -1,5 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Mint, MintTo, Transfer};
+use mpl_token_metadata::instructions::{CreateMetadataAccountV3Cpi, CreateMetadataAccountV3CpiAccounts, CreateMetadataAccountV3InstructionArgs};
+use mpl_token_metadata::types::DataV2;
 
 declare_id!("7BXzUwxv9aKULu8Jw4sYM9Web2Mg1PNHTrVWwJbiAsxw");
 
@@ -17,6 +19,42 @@ pub mod gpu_dex {
     pub fn initialize_gpu_mint(_ctx: Context<InitializeGpuMint>) -> Result<()> {
         // Mint is initialized via the account macro
         // Metadata can be added later via a separate instruction if needed
+        Ok(())
+    }
+
+    pub fn add_gpu_metadata(ctx: Context<AddGpuMetadata>) -> Result<()> {
+        let data_v2 = DataV2 {
+            name: "GPU Token".to_string(),
+            symbol: "gGPU".to_string(),
+            uri: "https://raw.githubusercontent.com/nottejas/gpu-token-metadata/refs/heads/main/gpu-token.json".to_string(),
+            seller_fee_basis_points: 0,
+            creators: None,
+            collection: None,
+            uses: None,
+        };
+
+        CreateMetadataAccountV3Cpi::new(
+            &ctx.accounts.token_metadata_program,
+            CreateMetadataAccountV3CpiAccounts {
+                metadata: &ctx.accounts.metadata,
+                mint: &ctx.accounts.gpu_mint.to_account_info(),
+                mint_authority: &ctx.accounts.mint_authority,
+                payer: &ctx.accounts.authority.to_account_info(),
+                update_authority: (&ctx.accounts.authority.to_account_info(), true),
+                system_program: &ctx.accounts.system_program,
+                rent: Some(&ctx.accounts.rent.to_account_info()),
+            },
+            CreateMetadataAccountV3InstructionArgs {
+                data: data_v2,
+                is_mutable: true,
+                collection_details: None,
+            },
+        )
+        .invoke_signed(&[&[
+            b"mint-authority",
+            &[ctx.bumps.mint_authority],
+        ]])?;
+
         Ok(())
     }
 
@@ -193,6 +231,24 @@ pub struct InitializeGpuMint<'info> {
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
+pub struct AddGpuMetadata<'info> {
+    #[account(mut, seeds = [b"gpu-mint"], bump)]
+    pub gpu_mint: Account<'info, Mint>,
+    /// CHECK: Metadata account created by Metaplex
+    #[account(mut)]
+    pub metadata: UncheckedAccount<'info>,
+    /// CHECK: PDA used as mint authority, validated by seeds constraint
+    #[account(seeds = [b"mint-authority"], bump)]
+    pub mint_authority: AccountInfo<'info>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+    /// CHECK: Metaplex Token Metadata Program
+    pub token_metadata_program: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]

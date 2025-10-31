@@ -20,4 +20,5 @@ program-keypair = "target/deploy/gpu_dex-keypair.json"
 [scripts]
 initialize_gpu_mint = "npx ts-node scripts/initialize_gpu_mint.ts"
 mint_gpu_tokens = "npx ts-node scripts/mint_gpu_tokens.ts"
+add_metadata = "npx ts-node scripts/add_metadata.ts"
 test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
