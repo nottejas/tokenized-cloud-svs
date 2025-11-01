@@ -8,22 +8,21 @@ import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccou
 import * as marketplace from "./src/lib/marketplace";
 import { BN } from "@coral-xyz/anchor";
 
-
 export default function Home() {
   const { connection } = useConnection();
-  const { publicKey, connected, sendTransaction } = useWallet();
+  const { publicKey, connected } = useWallet();
   const program = useProgram();
 
   const [balance, setBalance] = useState<number>(0);
   const [gpuBalance, setGpuBalance] = useState<number>(0);
   const [listings, setListings] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [sortBy, setSortBy] = useState<'price-asc' | 'price-desc' | 'amount-asc' | 'amount-desc'>('price-asc');
 
   // Form states
   const [mintAmount, setMintAmount] = useState('100');
   const [listAmount, setListAmount] = useState('');
   const [listPrice, setListPrice] = useState('');
-  // Buy amount state - stores amount to buy for each listing by index
   const [buyAmounts, setBuyAmounts] = useState<{[key: number]: string}>({});
 
   // Fetch SOL balance
@@ -91,6 +90,30 @@ export default function Home() {
     }
   }
 
+  // Get sorted listings
+  const getSortedListings = () => {
+    const sorted = [...listings];
+    switch (sortBy) {
+      case 'price-asc':
+        return sorted.sort((a, b) => a.price.toNumber() - b.price.toNumber());
+      case 'price-desc':
+        return sorted.sort((a, b) => b.price.toNumber() - a.price.toNumber());
+      case 'amount-asc':
+        return sorted.sort((a, b) => a.amount.toNumber() - b.amount.toNumber());
+      case 'amount-desc':
+        return sorted.sort((a, b) => b.amount.toNumber() - a.amount.toNumber());
+      default:
+        return sorted;
+    }
+  };
+
+  // Find best price
+  const getBestPrice = () => {
+    if (listings.length === 0) return null;
+    const sorted = [...listings].sort((a, b) => a.price.toNumber() - b.price.toNumber());
+    return (sorted[0].price.toNumber() / 1e9).toFixed(6);
+  };
+
   async function initializeMarketplace() {
     if (!publicKey || !program) return;
 
@@ -105,7 +128,7 @@ export default function Home() {
           authority: publicKey,
           systemProgram: SystemProgram.programId,
         })
-        .rpc();
+        .rpc({ skipPreflight: false, commitment: 'confirmed' });
 
       console.log('Marketplace initialized:', tx);
       alert('✅ Marketplace initialized successfully!');
@@ -134,7 +157,7 @@ export default function Home() {
           systemProgram: SystemProgram.programId,
           rent: SYSVAR_RENT_PUBKEY,
         })
-        .rpc();
+        .rpc({ skipPreflight: false, commitment: 'confirmed' });
 
       console.log('GPU Mint initialized:', tx);
       alert('✅ GPU Mint initialized successfully!');
@@ -145,73 +168,138 @@ export default function Home() {
     setLoading(false);
   }
 
-  async function mintGpuTokens() {
-  if (!publicKey || !program) return;
+  // NEW: Add GPU Metadata function
+  async function addGpuMetadata() {
+    if (!publicKey || !program) return;
 
-  setLoading(true);
-  try {
-    const gpuMint = await marketplace.getGpuMintPDA(program);
-    const mintAuthority = await marketplace.getMintAuthorityPDA(program);
-    const userTokenAccount = await getAssociatedTokenAddress(gpuMint, publicKey);
+    setLoading(true);
+    try {
+      const gpuMint = await marketplace.getGpuMintPDA(program);
+      const mintAuthority = await marketplace.getMintAuthorityPDA(program);
+      
+      // Derive metadata PDA
+      const TOKEN_METADATA_PROGRAM_ID = new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s');
+      const [metadataPDA] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from('metadata'),
+          TOKEN_METADATA_PROGRAM_ID.toBuffer(),
+          gpuMint.toBuffer(),
+        ],
+        TOKEN_METADATA_PROGRAM_ID
+      );
 
-    // Check if token account exists, if not create it
-    const accountInfo = await connection.getAccountInfo(userTokenAccount);
-    
-    const amount = new BN(Number(mintAmount) * 1e9);
-    
-    if (!accountInfo) {
-      // Create associated token account AND mint in same transaction
       const tx = await program.methods
-        .mintGpuTokens(amount)
+        .addGpuMetadata()
         .accounts({
           gpuMint,
-          userTokenAccount,
+          metadata: metadataPDA,
           mintAuthority,
-          tokenProgram: TOKEN_PROGRAM_ID,
+          authority: publicKey,
+          systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY,
+          tokenMetadataProgram: TOKEN_METADATA_PROGRAM_ID,
         })
-        .preInstructions([
-          createAssociatedTokenAccountInstruction(
-            publicKey,
-            userTokenAccount,
-            publicKey,
-            gpuMint
-          )
-        ])
-        .rpc();
+        .rpc({ skipPreflight: false, commitment: 'confirmed' });
 
-      console.log('Created token account and minted:', tx);
-    } else {
-      // Just mint
-      const tx = await program.methods
-        .mintGpuTokens(amount)
-        .accounts({
-          gpuMint,
-          userTokenAccount,
-          mintAuthority,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .rpc();
-
-      console.log('Minted tokens:', tx);
-    }
-
-    alert(`✅ Minted ${mintAmount} gGPU tokens!`);
-    await fetchGpuBalance();
-  } catch (error: any) {
-    console.error('Error:', error);
-    
-    // Check for specific errors
-    if (error.message && error.message.includes('unauthorized')) {
-      alert('❌ Error: Mint authority issue. The program may need redeployment.');
-    } else {
+      console.log('Added GPU metadata:', tx);
+      alert('✅ GPU Token metadata added! Tokens will now display properly in Phantom wallet with name, symbol, and logo.');
+    } catch (error: any) {
+      console.error('Error:', error);
       alert('❌ Error: ' + error.message);
     }
+    setLoading(false);
   }
-  setLoading(false);
-}
+
+  async function mintGpuTokens() {
+    if (!publicKey || !program) return;
+
+    setLoading(true);
+    try {
+      const gpuMint = await marketplace.getGpuMintPDA(program);
+      const mintAuthority = await marketplace.getMintAuthorityPDA(program);
+      const userTokenAccount = await getAssociatedTokenAddress(gpuMint, publicKey);
+
+      const accountInfo = await connection.getAccountInfo(userTokenAccount);
+      const amount = new BN(Number(mintAmount) * 1e9);
+      
+      if (!accountInfo) {
+        const tx = await program.methods
+          .mintGpuTokens(amount)
+          .accounts({
+            gpuMint,
+            userTokenAccount,
+            mintAuthority,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .preInstructions([
+            createAssociatedTokenAccountInstruction(
+              publicKey,
+              userTokenAccount,
+              publicKey,
+              gpuMint
+            )
+          ])
+          .rpc({ skipPreflight: false, commitment: 'confirmed' });
+
+        console.log('Created token account and minted:', tx);
+      } else {
+        const tx = await program.methods
+          .mintGpuTokens(amount)
+          .accounts({
+            gpuMint,
+            userTokenAccount,
+            mintAuthority,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .rpc({ skipPreflight: false, commitment: 'confirmed' });
+
+        console.log('Minted tokens:', tx);
+      }
+
+      alert(`✅ Minted ${mintAmount} gGPU tokens!`);
+      
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      await fetchGpuBalance();
+      const newBalance = await connection.getBalance(publicKey);
+      setBalance(newBalance / 1e9);
+    } catch (error: any) {
+      console.error('Error:', error);
+      
+      if (error.message && error.message.includes('unauthorized')) {
+        alert('❌ Error: Mint authority issue. The program may need redeployment.');
+      } else {
+        alert('❌ Error: ' + error.message);
+      }
+    }
+    setLoading(false);
+  }
+
   async function createListing() {
     if (!publicKey || !program || !listAmount || !listPrice) {
       alert('Please fill in all fields');
+      return;
+    }
+
+    const amount = parseFloat(listAmount);
+    const price = parseFloat(listPrice);
+
+    if (isNaN(amount) || amount <= 0) {
+      alert('❌ Invalid amount. Must be greater than 0');
+      return;
+    }
+
+    if (isNaN(price) || price <= 0) {
+      alert('❌ Invalid price. Must be greater than 0');
+      return;
+    }
+
+    if (amount < 0.001) {
+      alert('❌ Amount too small. Minimum is 0.001 gGPU');
+      return;
+    }
+
+    if (amount > gpuBalance) {
+      alert(`❌ Insufficient balance. You have ${gpuBalance.toFixed(2)} gGPU`);
       return;
     }
 
@@ -219,7 +307,7 @@ export default function Home() {
     try {
       const marketplacePDA = await marketplace.getMarketplacePDA(program);
       const marketplaceAccount = await program.account.marketplace.fetch(marketplacePDA);
-
+      
       const listingPDA = await marketplace.getListingPDA(
         program,
         publicKey,
@@ -229,11 +317,11 @@ export default function Home() {
       const gpuMint = await marketplace.getGpuMintPDA(program);
       const sellerTokenAccount = await getAssociatedTokenAddress(gpuMint, publicKey);
 
-      const price = new BN(Number(listPrice) * 1e9); // Convert SOL to lamports
-      const amount = new BN(Number(listAmount) * 1e9); // Convert tokens to smallest unit
+      const priceInLamports = new BN(Number(listPrice) * 1e9);
+      const amountInSmallestUnit = new BN(Number(listAmount) * 1e9);
 
       const tx = await program.methods
-        .createListing(price, amount)
+        .createListing(priceInLamports, amountInSmallestUnit)
         .accounts({
           listing: listingPDA,
           marketplace: marketplacePDA,
@@ -245,7 +333,7 @@ export default function Home() {
           systemProgram: SystemProgram.programId,
           rent: SYSVAR_RENT_PUBKEY,
         })
-        .rpc();
+        .rpc({ skipPreflight: false, commitment: 'confirmed' });
 
       console.log('Created listing:', tx);
       alert(`✅ Listing created! ${listAmount} gGPU at ${listPrice} SOL each`);
@@ -263,7 +351,6 @@ export default function Home() {
   async function buyListing(listing: any, listingIndex: number) {
     if (!publicKey || !program) return;
 
-    // Get the amount to buy from state, default to full listing amount
     const buyAmountInput = buyAmounts[listingIndex] || (listing.amount.toNumber() / 1e9).toString();
     const buyAmountTokens = parseFloat(buyAmountInput);
     
@@ -286,7 +373,6 @@ export default function Home() {
       const buyerTokenAccount = await getAssociatedTokenAddress(gpuMint, publicKey);
       const escrowPDA = await marketplace.getEscrowPDA(program, listing.address);
 
-      // Check if buyer token account exists
       const accountInfo = await connection.getAccountInfo(buyerTokenAccount);
       
       const instructions = [];
@@ -313,14 +399,13 @@ export default function Home() {
           systemProgram: SystemProgram.programId,
         })
         .preInstructions(instructions)
-        .rpc();
+        .rpc({ skipPreflight: false, commitment: 'confirmed' });
 
       console.log('Bought listing:', tx);
       
       const totalCost = (listing.price.toNumber() * buyAmountTokens * 1e9) / 1e18;
       alert(`✅ Purchase successful! Bought ${buyAmountTokens.toFixed(2)} gGPU for ${totalCost.toFixed(4)} SOL`);
       
-      // Clear the buy amount for this listing
       setBuyAmounts(prev => ({ ...prev, [listingIndex]: '' }));
       
       await fetchListings();
@@ -337,7 +422,6 @@ export default function Home() {
   async function cancelListing(listing: any) {
     if (!publicKey || !program) return;
 
-    // Verify the user owns this listing
     if (!listing.seller.equals(publicKey)) {
       alert('You can only cancel your own listings');
       return;
@@ -358,7 +442,7 @@ export default function Home() {
           seller: publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
-        .rpc();
+        .rpc({ skipPreflight: false, commitment: 'confirmed' });
 
       console.log('Cancelled listing:', tx);
       alert(`✅ Listing cancelled! ${(listing.amount.toNumber() / 1e9).toFixed(2)} gGPU returned to your wallet`);
@@ -423,8 +507,8 @@ export default function Home() {
             {/* Setup Section */}
             <div className="mb-8 bg-yellow-900/20 border border-yellow-600/50 rounded-2xl p-6">
               <h3 className="text-xl font-bold mb-4">⚙️ First Time Setup</h3>
-              <p className="text-sm text-gray-400 mb-4">Run these once to initialize the marketplace:</p>
-              <div className="flex gap-4">
+              <p className="text-sm text-gray-400 mb-4">Run these in order to initialize the marketplace:</p>
+              <div className="flex gap-4 flex-wrap">
                 <button
                   onClick={initializeMarketplace}
                   disabled={loading}
@@ -439,7 +523,17 @@ export default function Home() {
                 >
                   {loading ? '⏳ Processing...' : '2. Initialize GPU Mint'}
                 </button>
+                <button
+                  onClick={addGpuMetadata}
+                  disabled={loading}
+                  className="bg-yellow-600 hover:bg-yellow-700 px-6 py-2 rounded-lg font-semibold transition disabled:opacity-50"
+                >
+                  {loading ? '⏳ Processing...' : '3. Add GPU Metadata'}
+                </button>
               </div>
+              <p className="text-xs text-gray-500 mt-3">
+                💡 Step 3 adds token name, symbol, and logo so tokens display properly in Phantom wallet
+              </p>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
@@ -573,7 +667,27 @@ export default function Home() {
 
             {/* Order Book */}
             <div className="bg-gray-800/50 backdrop-blur-xl rounded-2xl p-6 border border-gray-700">
-              <h3 className="text-2xl font-bold mb-6">📊 Order Book</h3>
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-2xl font-bold">📊 Order Book</h3>
+                <select 
+                  value={sortBy} 
+                  onChange={(e) => setSortBy(e.target.value as any)}
+                  className="bg-gray-900 border border-gray-700 rounded px-4 py-2 text-sm"
+                >
+                  <option value="price-asc">Price: Low to High</option>
+                  <option value="price-desc">Price: High to Low</option>
+                  <option value="amount-asc">Amount: Low to High</option>
+                  <option value="amount-desc">Amount: High to Low</option>
+                </select>
+              </div>
+              
+              {listings.length > 0 && (
+                <div className="mb-4 bg-green-900/20 border border-green-600/50 rounded-lg p-4">
+                  <p className="text-sm text-gray-400">Best Available Price</p>
+                  <p className="text-2xl font-bold text-green-400">{getBestPrice()} SOL per gGPU</p>
+                </div>
+              )}
+              
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead className="border-b border-gray-700">
@@ -594,7 +708,7 @@ export default function Home() {
                         </td>
                       </tr>
                     ) : (
-                      listings.map((listing, idx) => {
+                      getSortedListings().map((listing, idx) => {
                         const isOwnListing = listing.seller.equals(publicKey);
                         const maxAmount = (listing.amount.toNumber() / 1e9).toFixed(2);
                         return (
