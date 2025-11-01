@@ -23,6 +23,8 @@ export default function Home() {
   const [mintAmount, setMintAmount] = useState('100');
   const [listAmount, setListAmount] = useState('');
   const [listPrice, setListPrice] = useState('');
+  // Buy amount state - stores amount to buy for each listing by index
+  const [buyAmounts, setBuyAmounts] = useState<{[key: number]: string}>({});
 
   // Fetch SOL balance
   useEffect(() => {
@@ -258,8 +260,25 @@ export default function Home() {
     setLoading(false);
   }
 
-  async function buyListing(listing: any) {
+  async function buyListing(listing: any, listingIndex: number) {
     if (!publicKey || !program) return;
+
+    // Get the amount to buy from state, default to full listing amount
+    const buyAmountInput = buyAmounts[listingIndex] || (listing.amount.toNumber() / 1e9).toString();
+    const buyAmountTokens = parseFloat(buyAmountInput);
+    
+    if (isNaN(buyAmountTokens) || buyAmountTokens <= 0) {
+      alert('Please enter a valid amount');
+      return;
+    }
+
+    const maxAmount = listing.amount.toNumber() / 1e9;
+    if (buyAmountTokens > maxAmount) {
+      alert(`Amount exceeds available tokens (${maxAmount.toFixed(2)} gGPU)`);
+      return;
+    }
+
+    const buyAmountLamports = new BN(buyAmountTokens * 1e9);
 
     setLoading(true);
     try {
@@ -283,7 +302,7 @@ export default function Home() {
       }
 
       const tx = await program.methods
-        .buyListing(listing.amount)
+        .buyListing(buyAmountLamports)
         .accounts({
           listing: listing.address,
           escrowTokenAccount: escrowPDA,
@@ -298,13 +317,54 @@ export default function Home() {
 
       console.log('Bought listing:', tx);
       
-      const totalCost = (listing.price.toNumber() * listing.amount.toNumber()) / 1e18;
-      alert(`✅ Purchase successful! Bought ${(listing.amount.toNumber() / 1e9).toFixed(2)} gGPU for ${totalCost.toFixed(4)} SOL`);
+      const totalCost = (listing.price.toNumber() * buyAmountTokens * 1e9) / 1e18;
+      alert(`✅ Purchase successful! Bought ${buyAmountTokens.toFixed(2)} gGPU for ${totalCost.toFixed(4)} SOL`);
+      
+      // Clear the buy amount for this listing
+      setBuyAmounts(prev => ({ ...prev, [listingIndex]: '' }));
       
       await fetchListings();
       await fetchGpuBalance();
       const newBalance = await connection.getBalance(publicKey);
       setBalance(newBalance / 1e9);
+    } catch (error: any) {
+      console.error('Error:', error);
+      alert('❌ Error: ' + error.message);
+    }
+    setLoading(false);
+  }
+
+  async function cancelListing(listing: any) {
+    if (!publicKey || !program) return;
+
+    // Verify the user owns this listing
+    if (!listing.seller.equals(publicKey)) {
+      alert('You can only cancel your own listings');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const gpuMint = await marketplace.getGpuMintPDA(program);
+      const sellerTokenAccount = await getAssociatedTokenAddress(gpuMint, publicKey);
+      const escrowPDA = await marketplace.getEscrowPDA(program, listing.address);
+
+      const tx = await program.methods
+        .cancelListing()
+        .accounts({
+          listing: listing.address,
+          escrowTokenAccount: escrowPDA,
+          sellerTokenAccount,
+          seller: publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .rpc();
+
+      console.log('Cancelled listing:', tx);
+      alert(`✅ Listing cancelled! ${(listing.amount.toNumber() / 1e9).toFixed(2)} gGPU returned to your wallet`);
+      
+      await fetchListings();
+      await fetchGpuBalance();
     } catch (error: any) {
       console.error('Error:', error);
       alert('❌ Error: ' + error.message);
@@ -430,6 +490,87 @@ export default function Home() {
               </div>
             </div>
 
+            {/* My Listings Dashboard */}
+            {listings.filter(l => l.seller.equals(publicKey)).length > 0 && (
+              <div className="bg-purple-900/20 backdrop-blur-xl rounded-2xl p-6 border border-purple-600/50 mb-8">
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-2xl font-bold">📋 My Listings</h3>
+                  <div className="flex gap-4">
+                    <div className="bg-purple-800/30 rounded-lg px-4 py-2">
+                      <p className="text-xs text-gray-400">Active Listings</p>
+                      <p className="text-xl font-bold">
+                        {listings.filter(l => l.seller.equals(publicKey)).length}
+                      </p>
+                    </div>
+                    <div className="bg-purple-800/30 rounded-lg px-4 py-2">
+                      <p className="text-xs text-gray-400">Total Value Locked</p>
+                      <p className="text-xl font-bold">
+                        {listings
+                          .filter(l => l.seller.equals(publicKey))
+                          .reduce((sum, l) => sum + ((l.price.toNumber() * l.amount.toNumber()) / 1e18), 0)
+                          .toFixed(4)} SOL
+                      </p>
+                    </div>
+                    <div className="bg-purple-800/30 rounded-lg px-4 py-2">
+                      <p className="text-xs text-gray-400">Total gGPU Listed</p>
+                      <p className="text-xl font-bold">
+                        {listings
+                          .filter(l => l.seller.equals(publicKey))
+                          .reduce((sum, l) => sum + (l.amount.toNumber() / 1e9), 0)
+                          .toFixed(2)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="border-b border-purple-700">
+                      <tr>
+                        <th className="text-left py-3 text-gray-400 font-medium">Price (SOL)</th>
+                        <th className="text-left py-3 text-gray-400 font-medium">Amount (gGPU)</th>
+                        <th className="text-left py-3 text-gray-400 font-medium">Total Value (SOL)</th>
+                        <th className="text-left py-3 text-gray-400 font-medium">Status</th>
+                        <th className="text-right py-3 text-gray-400 font-medium">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {listings
+                        .filter(l => l.seller.equals(publicKey))
+                        .map((listing, idx) => (
+                          <tr key={idx} className="border-b border-purple-700/50 hover:bg-purple-700/20 transition">
+                            <td className="py-4 font-semibold text-green-400">
+                              {(listing.price.toNumber() / 1e9).toFixed(4)}
+                            </td>
+                            <td className="py-4">
+                              {(listing.amount.toNumber() / 1e9).toFixed(2)}
+                            </td>
+                            <td className="py-4 font-semibold">
+                              {((listing.price.toNumber() * listing.amount.toNumber()) / 1e18).toFixed(4)}
+                            </td>
+                            <td className="py-4">
+                              <span className="bg-green-600/20 text-green-400 px-3 py-1 rounded-full text-xs font-semibold">
+                                Active
+                              </span>
+                            </td>
+                            <td className="py-4 text-right">
+                              <button
+                                onClick={() => cancelListing(listing)}
+                                disabled={loading}
+                                className="bg-red-600 hover:bg-red-700 px-6 py-2 rounded-lg text-sm font-semibold transition disabled:opacity-50"
+                              >
+                                {loading ? '⏳' : 'Cancel'}
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      }
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
             {/* Order Book */}
             <div className="bg-gray-800/50 backdrop-blur-xl rounded-2xl p-6 border border-gray-700">
               <h3 className="text-2xl font-bold mb-6">📊 Order Book</h3>
@@ -441,42 +582,73 @@ export default function Home() {
                       <th className="text-left py-3 text-gray-400 font-medium">Price (SOL)</th>
                       <th className="text-left py-3 text-gray-400 font-medium">Amount (gGPU)</th>
                       <th className="text-left py-3 text-gray-400 font-medium">Total (SOL)</th>
+                      <th className="text-left py-3 text-gray-400 font-medium">Buy Amount</th>
                       <th className="text-right py-3 text-gray-400 font-medium">Action</th>
                     </tr>
                   </thead>
                   <tbody>
                     {listings.length === 0 ? (
                       <tr className="border-b border-gray-700/50">
-                        <td colSpan={5} className="py-8 text-center text-gray-500">
+                        <td colSpan={6} className="py-8 text-center text-gray-500">
                           No active listings yet. Create the first one!
                         </td>
                       </tr>
                     ) : (
-                      listings.map((listing, idx) => (
-                        <tr key={idx} className="border-b border-gray-700/50 hover:bg-gray-700/20 transition">
-                          <td className="py-4 text-sm font-mono">
-                            {listing.seller.toString().slice(0, 4)}...{listing.seller.toString().slice(-4)}
-                          </td>
-                          <td className="py-4 font-semibold text-green-400">
-                            {(listing.price.toNumber() / 1e9).toFixed(4)}
-                          </td>
-                          <td className="py-4">
-                            {(listing.amount.toNumber() / 1e9).toFixed(2)}
-                          </td>
-                          <td className="py-4 font-semibold">
-                            {((listing.price.toNumber() * listing.amount.toNumber()) / 1e18).toFixed(4)}
-                          </td>
-                          <td className="py-4 text-right">
-                            <button
-                              onClick={() => buyListing(listing)}
-                              disabled={loading}
-                              className="bg-green-600 hover:bg-green-700 px-6 py-2 rounded-lg text-sm font-semibold transition disabled:opacity-50"
-                            >
-                              {loading ? '⏳' : 'Buy'}
-                            </button>
-                          </td>
-                        </tr>
-                      ))
+                      listings.map((listing, idx) => {
+                        const isOwnListing = listing.seller.equals(publicKey);
+                        const maxAmount = (listing.amount.toNumber() / 1e9).toFixed(2);
+                        return (
+                          <tr key={idx} className="border-b border-gray-700/50 hover:bg-gray-700/20 transition">
+                            <td className="py-4 text-sm font-mono">
+                              {isOwnListing ? (
+                                <span className="text-purple-400 font-semibold">You</span>
+                              ) : (
+                                <span>{listing.seller.toString().slice(0, 4)}...{listing.seller.toString().slice(-4)}</span>
+                              )}
+                            </td>
+                            <td className="py-4 font-semibold text-green-400">
+                              {(listing.price.toNumber() / 1e9).toFixed(4)}
+                            </td>
+                            <td className="py-4">
+                              {maxAmount}
+                            </td>
+                            <td className="py-4 font-semibold">
+                              {((listing.price.toNumber() * listing.amount.toNumber()) / 1e18).toFixed(4)}
+                            </td>
+                            <td className="py-4">
+                              {!isOwnListing && (
+                                <input
+                                  type="number"
+                                  value={buyAmounts[idx] || ''}
+                                  onChange={(e) => setBuyAmounts(prev => ({ ...prev, [idx]: e.target.value }))}
+                                  placeholder={maxAmount}
+                                  className="w-24 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-sm text-white"
+                                  disabled={loading}
+                                />
+                              )}
+                            </td>
+                            <td className="py-4 text-right">
+                              {isOwnListing ? (
+                                <button
+                                  onClick={() => cancelListing(listing)}
+                                  disabled={loading}
+                                  className="bg-red-600 hover:bg-red-700 px-6 py-2 rounded-lg text-sm font-semibold transition disabled:opacity-50"
+                                >
+                                  {loading ? '⏳' : 'Cancel'}
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => buyListing(listing, idx)}
+                                  disabled={loading}
+                                  className="bg-green-600 hover:bg-green-700 px-6 py-2 rounded-lg text-sm font-semibold transition disabled:opacity-50"
+                                >
+                                  {loading ? '⏳' : 'Buy'}
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
