@@ -45,7 +45,7 @@ Program ID is set consistently in:
 - `Anchor.toml` → `[programs.localnet].gpu_dex`
 - `programs/gpu_dex/src/lib.rs` → `declare_id!(...)`
 
-Current Program ID: `BRpDctiHbH3jC19VpcSBbKgKUJEnAqiuGWNwQEYv8Nzf`
+Current Program ID: `7BXzUwxv9aKULu8Jw4sYM9Web2Mg1PNHTrVWwJbiAsxw`
 
 If you redeploy with a new keypair, update both files accordingly.
 
