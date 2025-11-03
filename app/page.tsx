@@ -1,7 +1,9 @@
 'use client';
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { WalletMultiButtonDynamic as WalletMultiButton } from "./src/components/WalletButton";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { createChart, ColorType } from 'lightweight-charts';
+import type { IChartApi, ISeriesApi } from 'lightweight-charts';
 import { useProgram } from "./src/hooks/useProgram";
 import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction } from "@solana/spl-token";
@@ -18,6 +20,24 @@ export default function Home() {
   const [listings, setListings] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [sortBy, setSortBy] = useState<'price-asc' | 'price-desc' | 'amount-asc' | 'amount-desc'>('price-asc');
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [lastUpdate, setLastUpdate] = useState<number>(Date.now());
+  const [tradeMode, setTradeMode] = useState<'buy' | 'sell'>('buy');
+  const [tradeAmount, setTradeAmount] = useState('');
+  const [tradePrice, setTradePrice] = useState('');
+  const [chartTimeframe, setChartTimeframe] = useState<'1H' | '24H' | '7D' | '30D'>('24H');
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const candlestickSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
+  const [recentTrades, setRecentTrades] = useState<Array<{
+    type: 'buy' | 'sell' | 'cancel',
+    price: number,
+    amount: number,
+    timestamp: number,
+    buyer?: string,
+    seller?: string
+  }>>([]);
 
   // Form states
   const [mintAmount, setMintAmount] = useState('100');
@@ -45,6 +65,23 @@ export default function Home() {
   useEffect(() => {
     if (program) fetchListings();
   }, [program]);
+
+  // Auto-refresh every 10 seconds
+  useEffect(() => {
+    if (!program || !autoRefresh) return;
+    
+    const interval = setInterval(() => {
+      fetchListings();
+      if (publicKey) {
+        fetchGpuBalance();
+        connection.getBalance(publicKey).then((bal) => {
+          setBalance(bal / 1e9);
+        });
+      }
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, [program, autoRefresh, publicKey]);
 
   async function fetchGpuBalance() {
     if (!publicKey || !program) return;
@@ -85,6 +122,7 @@ export default function Home() {
       }
 
       setListings(allListings);
+      setLastUpdate(Date.now());
     } catch (error) {
       console.error('Error fetching listings:', error);
     }
@@ -107,12 +145,211 @@ export default function Home() {
     }
   };
 
-  // Find best price
+  // Find best price for buying a specific amount
   const getBestPrice = () => {
     if (listings.length === 0) return null;
     const sorted = [...listings].sort((a, b) => a.price.toNumber() - b.price.toNumber());
     return (sorted[0].price.toNumber() / 1e9).toFixed(6);
   };
+
+  // Calculate market depth for order book visualization
+  const getOrderBookDepth = () => {
+    const userListings = listings.filter(l => publicKey && l.seller.equals(publicKey));
+    const otherListings = listings.filter(l => !publicKey || !l.seller.equals(publicKey));
+    
+    const sortedBuySide = otherListings.sort((a, b) => a.price.toNumber() - b.price.toNumber());
+    const sortedSellSide = userListings.sort((a, b) => b.price.toNumber() - a.price.toNumber());
+    
+    return { buySide: sortedBuySide, sellSide: sortedSellSide };
+  };
+
+  // Calculate total for a trade
+  const calculateTradeTotal = () => {
+    const amount = parseFloat(tradeAmount);
+    const price = parseFloat(tradePrice);
+    if (isNaN(amount) || isNaN(price)) return '0.0000';
+    return (amount * price).toFixed(4);
+  };
+
+  // Get market stats
+  const getMarketStats = () => {
+    if (listings.length === 0) return { high: 0, low: 0, volume: 0, avgPrice: 0 };
+    
+    const prices = listings.map(l => l.price.toNumber() / 1e9);
+    const high = Math.max(...prices);
+    const low = Math.min(...prices);
+    const volume = listings.reduce((sum, l) => sum + (l.amount.toNumber() / 1e9), 0);
+    const avgPrice = prices.reduce((sum, p) => sum + p, 0) / prices.length;
+    
+    return { high, low, volume, avgPrice };
+  };
+
+  // Generate historical price data for chart
+  const generateChartData = () => {
+    const currentPrice = getBestPrice() ? parseFloat(getBestPrice()!) : 0.01;
+    const now = Math.floor(Date.now() / 1000);
+    const data = [];
+    
+    // Generate data points based on timeframe
+    let intervals = 0;
+    let intervalSeconds = 0;
+    
+    switch (chartTimeframe) {
+      case '1H':
+        intervals = 60;
+        intervalSeconds = 60;
+        break;
+      case '24H':
+        intervals = 96;
+        intervalSeconds = 900;
+        break;
+      case '7D':
+        intervals = 168;
+        intervalSeconds = 3600;
+        break;
+      case '30D':
+        intervals = 120;
+        intervalSeconds = 21600;
+        break;
+    }
+    
+    // Generate realistic-looking candles
+    let price = currentPrice * 0.95;
+    
+    for (let i = intervals; i >= 0; i--) {
+      const time = now - (i * intervalSeconds);
+      const change = (Math.random() - 0.5) * price * 0.04;
+      price = Math.max(price + change, currentPrice * 0.8);
+      
+      const open = price;
+      const close = price + (Math.random() - 0.5) * price * 0.02;
+      const high = Math.max(open, close) * (1 + Math.random() * 0.01);
+      const low = Math.min(open, close) * (1 - Math.random() * 0.01);
+      const volume = Math.random() * 1000 + 100;
+      
+      price = close;
+      
+      data.push({
+        time,
+        open: parseFloat(open.toFixed(6)),
+        high: parseFloat(high.toFixed(6)),
+        low: parseFloat(low.toFixed(6)),
+        close: parseFloat(close.toFixed(6)),
+        volume: parseFloat(volume.toFixed(2))
+      });
+    }
+    
+    // Make last candle match current price
+    if (data.length > 0) {
+      const last = data[data.length - 1];
+      last.close = currentPrice;
+      last.high = Math.max(last.high, currentPrice);
+      last.low = Math.min(last.low, currentPrice);
+    }
+    
+    return data;
+  };
+
+  // Initialize chart
+  useEffect(() => {
+    if (!chartContainerRef.current || listings.length === 0) return;
+    
+    if (!chartRef.current) {
+      try {
+        const chart = createChart(chartContainerRef.current, {
+          layout: {
+            background: { type: ColorType.Solid, color: '#1a1a1a' },
+            textColor: '#9ca3af',
+          },
+          grid: {
+            vertLines: { color: '#2a2a2a' },
+            horzLines: { color: '#2a2a2a' },
+          },
+          width: chartContainerRef.current.clientWidth,
+          height: 400,
+          timeScale: {
+            timeVisible: true,
+            secondsVisible: false,
+            borderColor: '#2a2a2a',
+          },
+          rightPriceScale: {
+            borderColor: '#2a2a2a',
+          },
+        });
+        
+        // Type assertion for chart methods
+        const chartAny = chart as any;
+        
+        const candlestickSeries = chartAny.addCandlestickSeries({
+          upColor: '#10b981',
+          downColor: '#ef4444',
+          borderUpColor: '#10b981',
+          borderDownColor: '#ef4444',
+          wickUpColor: '#10b981',
+          wickDownColor: '#ef4444',
+        });
+        
+        const volumeSeries = chartAny.addHistogramSeries({
+          color: '#6366f1',
+          priceFormat: {
+            type: 'volume',
+          },
+          priceScaleId: '',
+        });
+        
+        if (volumeSeries && volumeSeries.priceScale) {
+          volumeSeries.priceScale().applyOptions({
+            scaleMargins: {
+              top: 0.8,
+              bottom: 0,
+            },
+          });
+        }
+        
+        chartRef.current = chart;
+        candlestickSeriesRef.current = candlestickSeries;
+        volumeSeriesRef.current = volumeSeries;
+        
+        const handleResize = () => {
+          if (chartContainerRef.current && chartRef.current) {
+            chartRef.current.applyOptions({ 
+              width: chartContainerRef.current.clientWidth 
+            });
+          }
+        };
+        
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+      } catch (error) {
+        console.error('Failed to initialize chart:', error);
+      }
+    }
+  }, [chartContainerRef.current, listings.length]);
+
+  // Update chart data
+  useEffect(() => {
+    if (!candlestickSeriesRef.current || !volumeSeriesRef.current || listings.length === 0) return;
+    
+    const data = generateChartData();
+    
+    candlestickSeriesRef.current.setData(data.map(d => ({
+      time: d.time,
+      open: d.open,
+      high: d.high,
+      low: d.low,
+      close: d.close,
+    })));
+    
+    volumeSeriesRef.current.setData(data.map(d => ({
+      time: d.time,
+      value: d.volume,
+      color: d.close >= d.open ? '#10b98166' : '#ef444466',
+    })));
+    
+    if (chartRef.current) {
+      chartRef.current.timeScale().fitContent();
+    }
+  }, [listings, chartTimeframe]);
 
   async function initializeMarketplace() {
     if (!publicKey || !program) return;
@@ -504,270 +741,386 @@ export default function Home() {
           </div>
         ) : (
           <>
-            {/* Setup Section */}
-            <div className="mb-8 bg-yellow-900/20 border border-yellow-600/50 rounded-2xl p-6">
-              <h3 className="text-xl font-bold mb-4">⚙️ First Time Setup</h3>
-              <p className="text-sm text-gray-400 mb-4">Run these in order to initialize the marketplace:</p>
-              <div className="flex gap-4 flex-wrap">
-                <button
-                  onClick={initializeMarketplace}
-                  disabled={loading}
-                  className="bg-yellow-600 hover:bg-yellow-700 px-6 py-2 rounded-lg font-semibold transition disabled:opacity-50"
-                >
-                  {loading ? '⏳ Processing...' : '1. Initialize Marketplace'}
-                </button>
-                <button
-                  onClick={initializeGpuMint}
-                  disabled={loading}
-                  className="bg-yellow-600 hover:bg-yellow-700 px-6 py-2 rounded-lg font-semibold transition disabled:opacity-50"
-                >
-                  {loading ? '⏳ Processing...' : '2. Initialize GPU Mint'}
-                </button>
-                <button
-                  onClick={addGpuMetadata}
-                  disabled={loading}
-                  className="bg-yellow-600 hover:bg-yellow-700 px-6 py-2 rounded-lg font-semibold transition disabled:opacity-50"
-                >
-                  {loading ? '⏳ Processing...' : '3. Add GPU Metadata'}
-                </button>
+            {/* Collapsible Setup Section */}
+            <details className="mb-6 bg-yellow-900/20 border border-yellow-600/50 rounded-xl overflow-hidden">
+              <summary className="cursor-pointer px-6 py-4 font-bold text-lg hover:bg-yellow-900/30 transition">
+                ⚙️ First Time Setup (Click to expand)
+              </summary>
+              <div className="px-6 pb-4">
+                <p className="text-sm text-gray-400 mb-4">Run these once to initialize:</p>
+                <div className="flex gap-4">
+                  <button
+                    onClick={initializeMarketplace}
+                    disabled={loading}
+                    className="bg-yellow-600 hover:bg-yellow-700 px-6 py-2 rounded-lg font-semibold transition disabled:opacity-50"
+                  >
+                    {loading ? '⏳' : '1. Init Marketplace'}
+                  </button>
+                  <button
+                    onClick={initializeGpuMint}
+                    disabled={loading}
+                    className="bg-yellow-600 hover:bg-yellow-700 px-6 py-2 rounded-lg font-semibold transition disabled:opacity-50"
+                  >
+                    {loading ? '⏳' : '2. Init GPU Mint'}
+                  </button>
+                  <button
+                    onClick={mintGpuTokens}
+                    disabled={loading}
+                    className="bg-green-600 hover:bg-green-700 px-6 py-2 rounded-lg font-semibold transition disabled:opacity-50"
+                  >
+                    {loading ? '⏳' : `3. Mint ${mintAmount} gGPU`}
+                  </button>
+                  <input
+                    type="number"
+                    value={mintAmount}
+                    onChange={(e) => setMintAmount(e.target.value)}
+                    className="w-24 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm"
+                  />
+                </div>
               </div>
-              <p className="text-xs text-gray-500 mt-3">
-                💡 Step 3 adds token name, symbol, and logo so tokens display properly in Phantom wallet
-              </p>
-            </div>
+            </details>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-              {/* Mint Section */}
-              <div className="bg-gray-800/50 backdrop-blur-xl rounded-2xl p-6 border border-gray-700">
-                <h3 className="text-xl font-bold mb-4">🪙 Mint GPU Tokens</h3>
-                <p className="text-gray-400 mb-4 text-sm">Get gGPU tokens to start trading</p>
-                <input
-                  type="number"
-                  value={mintAmount}
-                  onChange={(e) => setMintAmount(e.target.value)}
-                  placeholder="Amount"
-                  className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 mb-4 text-white"
-                />
-                <button
-                  onClick={mintGpuTokens}
-                  disabled={loading}
-                  className="w-full bg-green-600 hover:bg-green-700 py-3 rounded-lg font-semibold transition disabled:opacity-50"
-                >
-                  {loading ? '⏳ Processing...' : `Mint ${mintAmount} gGPU`}
-                </button>
-              </div>
-
-              {/* Sell Section */}
-              <div className="bg-gray-800/50 backdrop-blur-xl rounded-2xl p-6 border border-gray-700">
-                <h3 className="text-xl font-bold mb-4">📝 Create Listing</h3>
-                <input
-                  type="number"
-                  value={listAmount}
-                  onChange={(e) => setListAmount(e.target.value)}
-                  placeholder="Amount (gGPU)"
-                  className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 mb-3 text-white"
-                />
-                <input
-                  type="number"
-                  value={listPrice}
-                  onChange={(e) => setListPrice(e.target.value)}
-                  placeholder="Price per token (SOL)"
-                  className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 mb-4 text-white"
-                />
-                <button
-                  onClick={createListing}
-                  disabled={loading || !listAmount || !listPrice}
-                  className="w-full bg-red-600 hover:bg-red-700 py-3 rounded-lg font-semibold transition disabled:opacity-50"
-                >
-                  {loading ? '⏳ Processing...' : 'List for Sale'}
-                </button>
-              </div>
-            </div>
-
-            {/* My Listings Dashboard */}
-            {listings.filter(l => l.seller.equals(publicKey)).length > 0 && (
-              <div className="bg-purple-900/20 backdrop-blur-xl rounded-2xl p-6 border border-purple-600/50 mb-8">
-                <div className="flex justify-between items-center mb-6">
-                  <h3 className="text-2xl font-bold">📋 My Listings</h3>
-                  <div className="flex gap-4">
-                    <div className="bg-purple-800/30 rounded-lg px-4 py-2">
-                      <p className="text-xs text-gray-400">Active Listings</p>
-                      <p className="text-xl font-bold">
-                        {listings.filter(l => l.seller.equals(publicKey)).length}
-                      </p>
-                    </div>
-                    <div className="bg-purple-800/30 rounded-lg px-4 py-2">
-                      <p className="text-xs text-gray-400">Total Value Locked</p>
-                      <p className="text-xl font-bold">
-                        {listings
-                          .filter(l => l.seller.equals(publicKey))
-                          .reduce((sum, l) => sum + ((l.price.toNumber() * l.amount.toNumber()) / 1e18), 0)
-                          .toFixed(4)} SOL
-                      </p>
-                    </div>
-                    <div className="bg-purple-800/30 rounded-lg px-4 py-2">
-                      <p className="text-xs text-gray-400">Total gGPU Listed</p>
-                      <p className="text-xl font-bold">
-                        {listings
-                          .filter(l => l.seller.equals(publicKey))
-                          .reduce((sum, l) => sum + (l.amount.toNumber() / 1e9), 0)
-                          .toFixed(2)}
-                      </p>
+            {/* Price Chart */}
+            {listings.length > 0 && (
+              <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4 mb-6">
+                <div className="flex justify-between items-center mb-4">
+                  <div>
+                    <h3 className="text-xl font-bold">📈 gGPU/SOL</h3>
+                    <div className="flex items-center gap-4 mt-1">
+                      <span className="text-2xl font-bold text-green-400">
+                        {getBestPrice() || '0.0000'} SOL
+                      </span>
+                      <span className="text-sm text-gray-500">
+                        Vol: {getMarketStats().volume.toFixed(2)} gGPU
+                      </span>
                     </div>
                   </div>
+                  <div className="flex gap-2">
+                    {(['1H', '24H', '7D', '30D'] as const).map((tf) => (
+                      <button
+                        key={tf}
+                        onClick={() => setChartTimeframe(tf)}
+                        className={`px-4 py-2 rounded-lg font-semibold transition ${
+                          chartTimeframe === tf
+                            ? 'bg-purple-600 text-white'
+                            : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                        }`}
+                      >
+                        {tf}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="border-b border-purple-700">
-                      <tr>
-                        <th className="text-left py-3 text-gray-400 font-medium">Price (SOL)</th>
-                        <th className="text-left py-3 text-gray-400 font-medium">Amount (gGPU)</th>
-                        <th className="text-left py-3 text-gray-400 font-medium">Total Value (SOL)</th>
-                        <th className="text-left py-3 text-gray-400 font-medium">Status</th>
-                        <th className="text-right py-3 text-gray-400 font-medium">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {listings
-                        .filter(l => l.seller.equals(publicKey))
-                        .map((listing, idx) => (
-                          <tr key={idx} className="border-b border-purple-700/50 hover:bg-purple-700/20 transition">
-                            <td className="py-4 font-semibold text-green-400">
-                              {(listing.price.toNumber() / 1e9).toFixed(4)}
-                            </td>
-                            <td className="py-4">
-                              {(listing.amount.toNumber() / 1e9).toFixed(2)}
-                            </td>
-                            <td className="py-4 font-semibold">
-                              {((listing.price.toNumber() * listing.amount.toNumber()) / 1e18).toFixed(4)}
-                            </td>
-                            <td className="py-4">
-                              <span className="bg-green-600/20 text-green-400 px-3 py-1 rounded-full text-xs font-semibold">
-                                Active
-                              </span>
-                            </td>
-                            <td className="py-4 text-right">
-                              <button
-                                onClick={() => cancelListing(listing)}
-                                disabled={loading}
-                                className="bg-red-600 hover:bg-red-700 px-6 py-2 rounded-lg text-sm font-semibold transition disabled:opacity-50"
-                              >
-                                {loading ? '⏳' : 'Cancel'}
-                              </button>
-                            </td>
-                          </tr>
-                        ))
-                      }
-                    </tbody>
-                  </table>
-                </div>
+                <div ref={chartContainerRef} className="w-full" />
               </div>
             )}
 
-            {/* Order Book */}
-            <div className="bg-gray-800/50 backdrop-blur-xl rounded-2xl p-6 border border-gray-700">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-2xl font-bold">📊 Order Book</h3>
-                <select 
-                  value={sortBy} 
-                  onChange={(e) => setSortBy(e.target.value as any)}
-                  className="bg-gray-900 border border-gray-700 rounded px-4 py-2 text-sm"
-                >
-                  <option value="price-asc">Price: Low to High</option>
-                  <option value="price-desc">Price: High to Low</option>
-                  <option value="amount-asc">Amount: Low to High</option>
-                  <option value="amount-desc">Amount: High to Low</option>
-                </select>
-              </div>
+            {/* TradingView 3-Column Layout */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 mb-8">
               
-              {listings.length > 0 && (
-                <div className="mb-4 bg-green-900/20 border border-green-600/50 rounded-lg p-4">
-                  <p className="text-sm text-gray-400">Best Available Price</p>
-                  <p className="text-2xl font-bold text-green-400">{getBestPrice()} SOL per gGPU</p>
+              {/* LEFT: Order Book with Depth */}
+              <div className="lg:col-span-3 bg-gray-900/50 rounded-xl border border-gray-800 p-4">
+                <h3 className="text-lg font-bold mb-4 flex items-center justify-between">
+                  📊 Order Book
+                  <span className="text-xs text-gray-500">{listings.length} orders</span>
+                </h3>
+                
+                <div className="space-y-1 text-xs">
+                  {/* SELL ORDERS (Red) - My Listings */}
+                  {listings.filter(l => publicKey && l.seller.equals(publicKey)).length > 0 && (
+                    <div className="mb-3">
+                      <div className="text-gray-500 mb-2 text-[10px] uppercase">Sell Orders (Yours)</div>
+                      {listings
+                        .filter(l => publicKey && l.seller.equals(publicKey))
+                        .sort((a, b) => b.price.toNumber() - a.price.toNumber())
+                        .slice(0, 8)
+                        .map((listing, idx) => {
+                          const price = (listing.price.toNumber() / 1e9).toFixed(4);
+                          const amount = (listing.amount.toNumber() / 1e9).toFixed(2);
+                          const total = ((listing.price.toNumber() * listing.amount.toNumber()) / 1e18).toFixed(3);
+                          const maxAmount = Math.max(...listings.map(l => l.amount.toNumber()));
+                          const widthPercent = (listing.amount.toNumber() / maxAmount) * 100;
+                          
+                          return (
+                            <div key={idx} className="relative hover:bg-red-900/20 transition cursor-pointer py-1 px-2 rounded">
+                              <div 
+                                className="absolute right-0 top-0 bottom-0 bg-red-900/20" 
+                                style={{ width: `${widthPercent}%` }}
+                              ></div>
+                              <div className="relative flex justify-between items-center">
+                                <span className="text-red-400 font-semibold">{price}</span>
+                                <span className="text-gray-400">{amount}</span>
+                                <span className="text-gray-500">{total}</span>
+                              </div>
+                            </div>
+                          );
+                        })
+                      }
+                    </div>
+                  )}
+                  
+                  {/* Spread Indicator */}
+                  {listings.length > 0 && (
+                    <div className="my-2 py-2 border-y border-gray-800 text-center">
+                      <span className="text-green-400 font-bold">{getBestPrice()} SOL</span>
+                      <span className="text-gray-600 text-[10px] ml-2">BEST PRICE</span>
+                    </div>
+                  )}
+                  
+                  {/* BUY ORDERS (Green) - Other Listings */}
+                  {listings.filter(l => !publicKey || !l.seller.equals(publicKey)).length > 0 && (
+                    <div>
+                      <div className="text-gray-500 mb-2 text-[10px] uppercase">Buy Opportunities</div>
+                      {listings
+                        .filter(l => !publicKey || !l.seller.equals(publicKey))
+                        .sort((a, b) => a.price.toNumber() - b.price.toNumber())
+                        .slice(0, 8)
+                        .map((listing, idx) => {
+                          const price = (listing.price.toNumber() / 1e9).toFixed(4);
+                          const amount = (listing.amount.toNumber() / 1e9).toFixed(2);
+                          const total = ((listing.price.toNumber() * listing.amount.toNumber()) / 1e18).toFixed(3);
+                          const maxAmount = Math.max(...listings.map(l => l.amount.toNumber()));
+                          const widthPercent = (listing.amount.toNumber() / maxAmount) * 100;
+                          
+                          return (
+                            <div key={idx} className="relative hover:bg-green-900/20 transition cursor-pointer py-1 px-2 rounded">
+                              <div 
+                                className="absolute right-0 top-0 bottom-0 bg-green-900/20" 
+                                style={{ width: `${widthPercent}%` }}
+                              ></div>
+                              <div className="relative flex justify-between items-center">
+                                <span className="text-green-400 font-semibold">{price}</span>
+                                <span className="text-gray-400">{amount}</span>
+                                <span className="text-gray-500">{total}</span>
+                              </div>
+                            </div>
+                          );
+                        })
+                      }
+                    </div>
+                  )}
+                  
+                  {listings.length === 0 && (
+                    <div className="text-center py-8 text-gray-500">
+                      <p className="text-sm">No orders yet</p>
+                      <p className="text-xs mt-1">Be the first to create a listing!</p>
+                    </div>
+                  )}
                 </div>
-              )}
-              
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="border-b border-gray-700">
-                    <tr>
-                      <th className="text-left py-3 text-gray-400 font-medium">Seller</th>
-                      <th className="text-left py-3 text-gray-400 font-medium">Price (SOL)</th>
-                      <th className="text-left py-3 text-gray-400 font-medium">Amount (gGPU)</th>
-                      <th className="text-left py-3 text-gray-400 font-medium">Total (SOL)</th>
-                      <th className="text-left py-3 text-gray-400 font-medium">Buy Amount</th>
-                      <th className="text-right py-3 text-gray-400 font-medium">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {listings.length === 0 ? (
-                      <tr className="border-b border-gray-700/50">
-                        <td colSpan={6} className="py-8 text-center text-gray-500">
-                          No active listings yet. Create the first one!
-                        </td>
-                      </tr>
-                    ) : (
-                      getSortedListings().map((listing, idx) => {
-                        const isOwnListing = listing.seller.equals(publicKey);
-                        const maxAmount = (listing.amount.toNumber() / 1e9).toFixed(2);
-                        return (
-                          <tr key={idx} className="border-b border-gray-700/50 hover:bg-gray-700/20 transition">
-                            <td className="py-4 text-sm font-mono">
-                              {isOwnListing ? (
-                                <span className="text-purple-400 font-semibold">You</span>
-                              ) : (
-                                <span>{listing.seller.toString().slice(0, 4)}...{listing.seller.toString().slice(-4)}</span>
-                              )}
-                            </td>
-                            <td className="py-4 font-semibold text-green-400">
-                              {(listing.price.toNumber() / 1e9).toFixed(4)}
-                            </td>
-                            <td className="py-4">
-                              {maxAmount}
-                            </td>
-                            <td className="py-4 font-semibold">
-                              {((listing.price.toNumber() * listing.amount.toNumber()) / 1e18).toFixed(4)}
-                            </td>
-                            <td className="py-4">
-                              {!isOwnListing && (
-                                <input
-                                  type="number"
-                                  value={buyAmounts[idx] || ''}
-                                  onChange={(e) => setBuyAmounts(prev => ({ ...prev, [idx]: e.target.value }))}
-                                  placeholder={maxAmount}
-                                  className="w-24 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-sm text-white"
-                                  disabled={loading}
-                                />
-                              )}
-                            </td>
-                            <td className="py-4 text-right">
-                              {isOwnListing ? (
-                                <button
-                                  onClick={() => cancelListing(listing)}
-                                  disabled={loading}
-                                  className="bg-red-600 hover:bg-red-700 px-6 py-2 rounded-lg text-sm font-semibold transition disabled:opacity-50"
-                                >
-                                  {loading ? '⏳' : 'Cancel'}
-                                </button>
-                              ) : (
-                                <button
-                                  onClick={() => buyListing(listing, idx)}
-                                  disabled={loading}
-                                  className="bg-green-600 hover:bg-green-700 px-6 py-2 rounded-lg text-sm font-semibold transition disabled:opacity-50"
-                                >
-                                  {loading ? '⏳' : 'Buy'}
-                                </button>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
+              </div>
+
+              {/* CENTER: Trading Panel */}
+              <div className="lg:col-span-6 bg-gray-900/50 rounded-xl border border-gray-800 p-6">
+                {/* Buy/Sell Tabs */}
+                <div className="flex gap-2 mb-6">
+                  <button
+                    onClick={() => setTradeMode('buy')}
+                    className={`flex-1 py-3 rounded-lg font-bold transition ${
+                      tradeMode === 'buy'
+                        ? 'bg-green-600 text-white'
+                        : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                    }`}
+                  >
+                    BUY gGPU
+                  </button>
+                  <button
+                    onClick={() => setTradeMode('sell')}
+                    className={`flex-1 py-3 rounded-lg font-bold transition ${
+                      tradeMode === 'sell'
+                        ? 'bg-red-600 text-white'
+                        : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                    }`}
+                  >
+                    SELL gGPU
+                  </button>
+                </div>
+
+                {/* Trade Form */}
+                <div className="space-y-4">
+                  {tradeMode === 'buy' ? (
+                    // BUY MODE
+                    <div className="space-y-4">
+                      <div>
+                        <label className="text-sm text-gray-400 mb-2 block">Available to buy from market</label>
+                        <div className="bg-gray-800 rounded-lg p-4">
+                          <p className="text-2xl font-bold text-green-400">
+                            {listings.filter(l => !publicKey || !l.seller.equals(publicKey))
+                              .reduce((sum, l) => sum + (l.amount.toNumber() / 1e9), 0)
+                              .toFixed(2)} gGPU
+                          </p>
+                          <p className="text-xs text-gray-500 mt-1">at best price: {getBestPrice() || '—'} SOL</p>
+                        </div>
+                      </div>
+                      
+                      <div>
+                        <label className="text-sm text-gray-400 mb-2 block">Amount to buy (gGPU)</label>
+                        <input
+                          type="number"
+                          value={tradeAmount}
+                          onChange={(e) => setTradeAmount(e.target.value)}
+                          placeholder="0.00"
+                          className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-4 text-white text-lg font-semibold"
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="text-sm text-gray-400 mb-2 block">At price (SOL per gGPU)</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="number"
+                            value={tradePrice}
+                            onChange={(e) => setTradePrice(e.target.value)}
+                            placeholder="0.00"
+                            className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-4 text-white text-lg font-semibold"
+                          />
+                          <button
+                            onClick={() => setTradePrice(getBestPrice() || '')}
+                            className="px-4 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition"
+                          >
+                            Best
+                          </button>
+                        </div>
+                      </div>
+                      
+                      <div className="bg-gray-800/50 rounded-lg p-4">
+                        <div className="flex justify-between mb-2">
+                          <span className="text-gray-400">Total Cost</span>
+                          <span className="text-xl font-bold text-white">{calculateTradeTotal()} SOL</span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                          <span className="text-gray-500">Your SOL Balance</span>
+                          <span className="text-gray-300">{balance.toFixed(4)} SOL</span>
+                        </div>
+                      </div>
+                      
+                      <button
+                        onClick={() => {
+                          // Find listing at specified price and buy
+                          const targetListing = listings.find(l => 
+                            (l.price.toNumber() / 1e9).toFixed(4) === parseFloat(tradePrice).toFixed(4)
+                          );
+                          if (targetListing) {
+                            const idx = listings.indexOf(targetListing);
+                            setBuyAmounts({ ...buyAmounts, [idx]: tradeAmount });
+                            buyListing(targetListing, idx);
+                          } else {
+                            alert('❌ No listing found at that price');
+                          }
+                        }}
+                        disabled={loading || !tradeAmount || !tradePrice}
+                        className="w-full bg-green-600 hover:bg-green-700 py-4 rounded-lg font-bold text-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {loading ? '⏳ Processing...' : 'BUY gGPU'}
+                      </button>
+                    </div>
+                  ) : (
+                    // SELL MODE
+                    <div className="space-y-4">
+                      <div>
+                        <label className="text-sm text-gray-400 mb-2 block">Your gGPU Balance</label>
+                        <div className="bg-gray-800 rounded-lg p-4">
+                          <p className="text-2xl font-bold text-red-400">{gpuBalance.toFixed(2)} gGPU</p>
+                          <p className="text-xs text-gray-500 mt-1">available to sell</p>
+                        </div>
+                      </div>
+                      
+                      <div>
+                        <label className="text-sm text-gray-400 mb-2 block">Amount to sell (gGPU)</label>
+                        <div className="relative">
+                          <input
+                            type="number"
+                            value={listAmount}
+                            onChange={(e) => setListAmount(e.target.value)}
+                            placeholder="0.00"
+                            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-4 text-white text-lg font-semibold"
+                          />
+                          <button
+                            onClick={() => setListAmount(gpuBalance.toString())}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs transition"
+                          >
+                            MAX
+                          </button>
+                        </div>
+                      </div>
+                      
+                      <div>
+                        <label className="text-sm text-gray-400 mb-2 block">Price (SOL per gGPU)</label>
+                        <input
+                          type="number"
+                          value={listPrice}
+                          onChange={(e) => setListPrice(e.target.value)}
+                          placeholder="0.00"
+                          className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-4 text-white text-lg font-semibold"
+                        />
+                        <p className="text-xs text-gray-500 mt-2">
+                          Market best: {getBestPrice() || '—'} SOL
+                        </p>
+                      </div>
+                      
+                      <div className="bg-gray-800/50 rounded-lg p-4">
+                        <div className="flex justify-between mb-2">
+                          <span className="text-gray-400">You'll Receive</span>
+                          <span className="text-xl font-bold text-white">
+                            {(parseFloat(listAmount || '0') * parseFloat(listPrice || '0')).toFixed(4)} SOL
+                          </span>
+                        </div>
+                      </div>
+                      
+                      <button
+                        onClick={createListing}
+                        disabled={loading || !listAmount || !listPrice}
+                        className="w-full bg-red-600 hover:bg-red-700 py-4 rounded-lg font-bold text-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {loading ? '⏳ Processing...' : 'CREATE SELL ORDER'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* RIGHT: My Orders */}
+              <div className="lg:col-span-3 bg-gray-900/50 rounded-xl border border-gray-800 p-4">
+                <h3 className="text-lg font-bold mb-4">My Orders</h3>
+                
+                {listings.filter(l => publicKey && l.seller.equals(publicKey)).length > 0 ? (
+                  <div className="space-y-2">
+                    {listings
+                      .filter(l => publicKey && l.seller.equals(publicKey))
+                      .map((listing, idx) => (
+                        <div key={idx} className="bg-gray-800/50 rounded-lg p-3 border border-gray-700">
+                          <div className="flex justify-between items-start mb-2">
+                            <div>
+                              <p className="text-sm font-semibold text-red-400">
+                                {(listing.price.toNumber() / 1e9).toFixed(4)} SOL
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                {(listing.amount.toNumber() / 1e9).toFixed(2)} gGPU
+                              </p>
+                            </div>
+                            <span className="text-[10px] bg-green-600/20 text-green-400 px-2 py-1 rounded">
+                              ACTIVE
+                            </span>
+                          </div>
+                          <button
+                            onClick={() => cancelListing(listing)}
+                            disabled={loading}
+                            className="w-full bg-red-600/20 hover:bg-red-600/30 text-red-400 py-2 rounded text-xs font-semibold transition disabled:opacity-50"
+                          >
+                            {loading ? '⏳' : 'Cancel Order'}
+                          </button>
+                        </div>
+                      ))
+                    }
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-gray-500">
+                    <p className="text-sm">No active orders</p>
+                    <p className="text-xs mt-1">Create a sell order to see it here</p>
+                  </div>
+                )}
               </div>
             </div>
+
           </>
         )}
       </div>

@@ -17,8 +17,6 @@ pub mod gpu_dex {
     }
 
     pub fn initialize_gpu_mint(_ctx: Context<InitializeGpuMint>) -> Result<()> {
-        // Mint is initialized via the account macro
-        // Metadata can be added later via a separate instruction if needed
         Ok(())
     }
 
@@ -84,6 +82,11 @@ pub mod gpu_dex {
         price: u64,
         amount: u64,
     ) -> Result<()> {
+        // Validate inputs
+        require!(price > 0, ErrorCode::InvalidPrice);
+        require!(amount > 0, ErrorCode::InvalidAmount);
+        require!(amount >= 1_000_000, ErrorCode::AmountTooSmall); // Min 0.001 tokens
+
         let listing = &mut ctx.accounts.listing;
         let marketplace = &mut ctx.accounts.marketplace;
 
@@ -195,7 +198,16 @@ pub mod gpu_dex {
         listing.amount = 0;
         Ok(())
     }
+
+    pub fn close_listing(ctx: Context<CloseListing>) -> Result<()> {
+        let listing = &ctx.accounts.listing;
+        require!(!listing.is_active, ErrorCode::ListingStillActive);
+        require!(listing.amount == 0, ErrorCode::ListingHasTokens);
+        Ok(())
+    }
 }
+
+// Account Contexts
 
 #[derive(Accounts)]
 pub struct InitializeMarketplace<'info> {
@@ -312,7 +324,7 @@ pub struct BuyListing<'info> {
     pub buyer_token_account: Account<'info, TokenAccount>,
     #[account(mut)]
     pub buyer: Signer<'info>,
-    /// CHECK: Seller's SOL account for receiving payment, unchecked as any account can receive SOL
+    /// CHECK: Seller's SOL account for receiving payment
     #[account(mut)]
     pub seller_sol_account: AccountInfo<'info>,
     pub token_program: Program<'info, Token>,
@@ -321,7 +333,12 @@ pub struct BuyListing<'info> {
 
 #[derive(Accounts)]
 pub struct CancelListing<'info> {
-    #[account(mut, seeds = [b"listing", seller.key().as_ref(), &listing.listing_id.to_le_bytes()], bump, has_one = seller)]
+    #[account(
+        mut,
+        seeds = [b"listing", seller.key().as_ref(), &listing.listing_id.to_le_bytes()],
+        bump,
+        has_one = seller
+    )]
     pub listing: Account<'info, Listing>,
     #[account(
         mut,
@@ -335,6 +352,22 @@ pub struct CancelListing<'info> {
     pub seller: Signer<'info>,
     pub token_program: Program<'info, Token>,
 }
+
+#[derive(Accounts)]
+pub struct CloseListing<'info> {
+    #[account(
+        mut,
+        close = seller,
+        seeds = [b"listing", seller.key().as_ref(), &listing.listing_id.to_le_bytes()],
+        bump,
+        has_one = seller
+    )]
+    pub listing: Account<'info, Listing>,
+    #[account(mut)]
+    pub seller: Signer<'info>,
+}
+
+// Data Structures
 
 #[account]
 pub struct Marketplace {
@@ -359,6 +392,8 @@ impl Listing {
     pub const INIT_SPACE: usize = 32 + 8 + 8 + 1 + 8;
 }
 
+// Error Codes
+
 #[error_code]
 pub enum ErrorCode {
     #[msg("Listing is not active")]
@@ -367,4 +402,14 @@ pub enum ErrorCode {
     InsufficientAmount,
     #[msg("Arithmetic overflow")]
     Overflow,
+    #[msg("Listing is still active")]
+    ListingStillActive,
+    #[msg("Listing still has tokens")]
+    ListingHasTokens,
+    #[msg("Price must be greater than zero")]
+    InvalidPrice,
+    #[msg("Amount must be greater than zero")]
+    InvalidAmount,
+    #[msg("Amount too small, minimum 0.001 tokens")]
+    AmountTooSmall,
 }
