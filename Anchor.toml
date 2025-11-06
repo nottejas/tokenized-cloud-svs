@@ -4,6 +4,9 @@
 resolution = true
 skip-lint = false
 
+[programs.localnet]
+gpu_dex = "7BXzUwxv9aKULu8Jw4sYM9Web2Mg1PNHTrVWwJbiAsxw"
+
 [programs.devnet]
 gpu_dex = "7BXzUwxv9aKULu8Jw4sYM9Web2Mg1PNHTrVWwJbiAsxw"
 
@@ -21,4 +24,4 @@ program-keypair = "target/deploy/gpu_dex-keypair.json"
 initialize_gpu_mint = "npx ts-node scripts/initialize_gpu_mint.ts"
 mint_gpu_tokens = "npx ts-node scripts/mint_gpu_tokens.ts"
 add_metadata = "npx ts-node scripts/add_metadata.ts"
-test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+test = "yarn run ts-mocha -p ./tsconfig.test.json -t 1000000 'tests/**/*.test.ts' 'tests/gpu_dex.ts'"
