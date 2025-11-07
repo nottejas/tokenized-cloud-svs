@@ -19,6 +19,12 @@ coverage/
 .pnpm-store/
 .yarn/*
 !.yarn/releases
+# Ignore local Solana ledgers and validator data
+test-ledger/
+app/test-ledger/
+target/
+node_modules/
+
 !.yarn/plugins
 !.yarn/sdks
 !.yarn/versions
