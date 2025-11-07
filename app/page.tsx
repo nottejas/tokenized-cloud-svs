@@ -606,14 +606,41 @@ export default function Home() {
 
     setLoading(true);
     try {
+      // CRITICAL: Fetch fresh listing data to avoid stale state
+      console.log('Fetching latest listing data...');
+      const freshListing = await program.account.listing.fetch(listing.address);
+      
+      if (!freshListing.isActive) {
+        alert('❌ This listing is no longer active. Refreshing...');
+        await fetchListings();
+        setLoading(false);
+        return;
+      }
+      
+      const currentAvailable = freshListing.amount.toNumber() / 1e9;
+      if (buyAmountTokens > currentAvailable) {
+        alert(`❌ Only ${currentAvailable.toFixed(3)} gGPU available now (someone else bought some). Refreshing...`);
+        await fetchListings();
+        setLoading(false);
+        return;
+      }
+      
+      console.log(`Fresh listing check passed. Available: ${currentAvailable} gGPU`);
+      
       const gpuMint = await marketplace.getGpuMintPDA(program);
       const buyerTokenAccount = await getAssociatedTokenAddress(gpuMint, publicKey);
       const escrowPDA = await marketplace.getEscrowPDA(program, listing.address);
 
+      // Check if buyer has sufficient SOL for transaction
+      const buyerBalance = await connection.getBalance(publicKey);
+      const totalCost = (freshListing.price.toNumber() * buyAmountTokens * 1e9) / 1e18;
+      
       const accountInfo = await connection.getAccountInfo(buyerTokenAccount);
       
       const instructions = [];
+      let additionalCost = 0;
       if (!accountInfo) {
+        additionalCost = 0.00203928; // Token account creation cost
         instructions.push(
           createAssociatedTokenAccountInstruction(
             publicKey,
@@ -622,6 +649,22 @@ export default function Home() {
             gpuMint
           )
         );
+        console.log('Will create token account: +0.00203928 SOL');
+      }
+      
+      const totalRequired = totalCost + additionalCost + 0.001; // Buffer for fees
+      const buyerBalanceSOL = buyerBalance / 1e9;
+      
+      if (buyerBalanceSOL < totalRequired) {
+        alert(`❌ Insufficient SOL\n\nRequired: ${totalRequired.toFixed(6)} SOL\n- Purchase: ${totalCost.toFixed(6)} SOL\n- Account creation: ${additionalCost.toFixed(6)} SOL\n- Network fees: ~0.001 SOL\n\nYour balance: ${buyerBalanceSOL.toFixed(6)} SOL\nShortfall: ${(totalRequired - buyerBalanceSOL).toFixed(6)} SOL`);
+        setLoading(false);
+        return;
+      }
+      
+      console.log(`Balance check passed: ${buyerBalanceSOL.toFixed(6)} SOL >= ${totalRequired.toFixed(6)} SOL required`);
+      console.log(`Purchase cost: ${totalCost.toFixed(6)} SOL for ${buyAmountTokens} gGPU`);
+      if (additionalCost > 0) {
+        console.log(`Additional account creation: ${additionalCost} SOL`);
       }
 
       const tx = await program.methods
@@ -640,8 +683,10 @@ export default function Home() {
 
       console.log('Bought listing:', tx);
       
-      const totalCost = (listing.price.toNumber() * buyAmountTokens * 1e9) / 1e18;
+      // totalCost already calculated above
       alert(`✅ Purchase successful! Bought ${buyAmountTokens.toFixed(2)} gGPU for ${totalCost.toFixed(4)} SOL`);
+      console.log(`Transaction signature: ${tx}`);
+      console.log(`Total paid: ${totalCost.toFixed(6)} SOL`);;
       
       setBuyAmounts(prev => ({ ...prev, [listingIndex]: '' }));
       
@@ -650,8 +695,26 @@ export default function Home() {
       const newBalance = await connection.getBalance(publicKey);
       setBalance(newBalance / 1e9);
     } catch (error: any) {
-      console.error('Error:', error);
-      alert('❌ Error: ' + error.message);
+      console.error('Error buying listing:', error);
+      
+      // Parse specific error types
+      let errorMessage = '❌ Purchase failed: ';
+      
+      if (error.message?.includes('0x1') || error.message?.includes('InsufficientAmount')) {
+        errorMessage += 'Listing no longer has enough tokens (someone else bought them first). Refreshing...';
+        await fetchListings();
+      } else if (error.message?.includes('0x0') || error.message?.includes('ListingNotActive')) {
+        errorMessage += 'Listing is no longer active. Refreshing...';
+        await fetchListings();
+      } else if (error.message?.includes('insufficient funds') || error.message?.includes('not enough SOL')) {
+        errorMessage += 'Not enough SOL in your wallet for this transaction and fees.';
+      } else if (error.message?.includes('User rejected')) {
+        errorMessage = 'Transaction cancelled by user.';
+      } else {
+        errorMessage += error.message;
+      }
+      
+      alert(errorMessage);
     }
     setLoading(false);
   }

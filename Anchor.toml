@@ -21,6 +21,7 @@ wallet = "~/.config/solana/id.json"
 program-keypair = "target/deploy/gpu_dex-keypair.json"
 
 [scripts]
+initialize_marketplace = "npx ts-node scripts/initialize_marketplace.ts"
 initialize_gpu_mint = "npx ts-node scripts/initialize_gpu_mint.ts"
 mint_gpu_tokens = "npx ts-node scripts/mint_gpu_tokens.ts"
 add_metadata = "npx ts-node scripts/add_metadata.ts"
